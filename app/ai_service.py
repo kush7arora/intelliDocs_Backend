@@ -3,7 +3,11 @@ AI Service Module
 Handles text summarization, improvement suggestions, and key information extraction
 """
 
-from transformers import pipeline
+try:
+    from transformers import pipeline
+except Exception as e:
+    print("⚠️ Transformers not available:", e)
+    pipeline = None
 import spacy
 import re
 from datetime import datetime
@@ -20,18 +24,35 @@ _summarizer = None
 
 def get_summarizer():
     """
-    Lazy load the summarization model to avoid startup delays
-    Using facebook/bart-large-cnn - excellent for meeting summaries
+    Lazy load the summarization model to avoid startup delays.
+    Falls back to a dummy summarizer if transformers/torch are unavailable.
     """
     global _summarizer
-    if _summarizer is None:
-        print("Loading summarization model... (this may take a minute first time)")
+
+    if _summarizer is not None:
+        return _summarizer
+
+    if pipeline is None:
+        # Fallback dummy summarizer (no ML)
+        print("⚠️ Using dummy summarizer (no transformers installed).")
+        _summarizer = lambda text, **kwargs: [
+            {"summary_text": text[:300] + "... (summary unavailable)"}
+        ]
+        return _summarizer
+
+    try:
+        print("Loading summarization model... (may take a minute first time)")
         _summarizer = pipeline(
             "summarization",
             model="facebook/bart-large-cnn",
-            device=-1  # Use CPU (set to 0 for GPU if available)
+            device=-1  # CPU
         )
-        print("Summarization model loaded successfully!")
+        print("✅ Summarization model loaded successfully!")
+    except Exception as e:
+        print("⚠️ Could not load summarizer:", e)
+        _summarizer = lambda text, **kwargs: [
+            {"summary_text": text[:300] + "... (summary unavailable)"}
+        ]
     return _summarizer
 
 def summarize_text(text, max_length=150, min_length=50):
