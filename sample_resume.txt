@@ -1,0 +1,38 @@
+John Doe
+Software Engineer
+john.doe@email.com | (555) 123-4567
+linkedin.com/in/johndoe | github.com/johndoe
+
+Professional Summary
+Experienced software engineer with 4 years of expertise in full-stack development, specializing in Python, React, and AWS cloud services.
+
+Technical Skills
+Languages: Python, JavaScript, TypeScript, Java
+Frameworks: React, Flask, Django, Node.js
+Cloud: AWS, Docker, Kubernetes
+Databases: PostgreSQL, MongoDB, Redis
+Tools: Git, Jenkins, JIRA
+
+Professional Experience
+
+Senior Software Engineer | Tech Corp | 2022 - Present
+- Developed microservices architecture serving 1M+ users
+- Reduced API response time by 40% through optimization
+- Led team of 5 developers on cloud migration project
+
+Software Engineer | StartupCo | 2020 - 2022
+- Built full-stack web applications using React and Flask
+- Implemented CI/CD pipeline reducing deployment time by 60%
+- Collaborated with product team on feature development
+
+Education
+Bachelor of Science in Computer Science
+State University, 2020
+
+Projects
+- E-commerce Platform: Built scalable platform handling 10K+ daily transactions
+- AI Chat Bot: Developed NLP-powered chatbot using Python and transformers
+
+Certifications
+- AWS Certified Solutions Architect
+- Certified Kubernetes Administrator

@@ -1,0 +1,14 @@
+# Ignore Python virtual environment
+venvAWS/
+
+# Ignore environment variables and cache
+.env
+__pycache__/
+*.pyc
+
+# Ignore editor and OS files
+*.vscode/
+.DS_Store
+
+# Ignore uploaded or temporary files
+uploads/
