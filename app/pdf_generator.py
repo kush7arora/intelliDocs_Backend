@@ -10,6 +10,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 from datetime import datetime
+import pytz
+
 import os
 
 def create_resume_pdf(analysis_data, output_path):
@@ -66,7 +68,10 @@ def create_resume_pdf(analysis_data, output_path):
     
     # Metadata
     analysis = analysis_data.get('analysis', {})
-    metadata_text = f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}"
+    ist = pytz.timezone('Asia/Kolkata')
+    current_time = datetime.now(ist)
+    metadata_text = f"Generated: {current_time.strftime('%B %d, %Y at %I:%M %p')} IST"
+    metadata = Paragraph(metadata_text, normal_style)
     metadata = Paragraph(metadata_text, normal_style)
     elements.append(metadata)
     elements.append(Spacer(1, 20))

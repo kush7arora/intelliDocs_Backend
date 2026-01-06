@@ -228,101 +228,278 @@ def check_resume_sections(text):
     
     return sections
 
-def calculate_ats_score(text, job_description=None):
-    """
-    Calculate ATS compatibility score
-    
-    Args:
-        text (str): Resume text
-        job_description (str): Optional job description for matching
-    
-    Returns:
-        int: ATS score (0-100)
-    """
-    score = 0
-    max_score = 100
-    
-    # Contact info (15 points)
-    contact = extract_contact_info(text)
-    if contact['email']:
-        score += 8
-    if contact['phone']:
-        score += 7
-    
-    # Sections present (25 points)
-    sections = check_resume_sections(text)
-    section_score = sum(sections.values()) / len(sections) * 25
-    score += section_score
-    
-    # Skills presence (20 points)
-    skills = extract_skills(text)
-    total_skills = sum(len(skills_list) for skills_list in skills['technical'].values()) + len(skills['soft'])
-    if total_skills > 15:
-        score += 20
-    elif total_skills > 10:
-        score += 15
-    elif total_skills > 5:
-        score += 10
-    else:
-        score += 5
-    
-    # Education (15 points)
-    education = extract_education(text)
-    if education:
-        score += 15
-    
-    # Experience (15 points)
-    experience_years = extract_experience_years(text)
-    if experience_years > 5:
-        score += 15
-    elif experience_years > 2:
-        score += 10
-    elif experience_years > 0:
-        score += 5
-    
-    # Keyword density (10 points)
-    word_count = len(text.split())
-    if 400 < word_count < 800:
-        score += 10
-    elif 300 < word_count < 1000:
-        score += 7
-    else:
-        score += 3
-    
-    # Job description matching (bonus if provided)
-    if job_description:
-        match_score = calculate_keyword_match(text, job_description)
-        score = int(score * 0.7 + match_score * 0.3)  # Weighted combination
-    
-    return min(int(score), max_score)
 
-def calculate_keyword_match(resume_text, job_description):
+# relies on `nlp` if available in your module (you already set `nlp = spacy.load(...)` or None)
+# and on your TECH_SKILLS dict and SOFT_SKILLS list already defined.
+
+# small stopword set for lightweight filtering
+_STOPWORDS = {
+    'the', 'and', 'for', 'with', 'this', 'that', 'will', 'have', 'from', 'are', 'can',
+    'a', 'an', 'to', 'in', 'on', 'of', 'by', 'is', 'as', 'at', 'or', 'be', 'we', 'our'
+}
+
+def _normalize(text: str) -> str:
+    if not text:
+        return ''
+    return re.sub(r'\s+', ' ', text.strip().lower())
+
+def _word_tokens(text: str):
+    return re.findall(r'\b[a-z0-9+#.\-]{2,}\b', text.lower())
+
+def _extract_candidate_keywords(text: str):
     """
-    Calculate keyword match between resume and job description
-    
-    Args:
-        resume_text (str): Resume text
-        job_description (str): Job description
-    
-    Returns:
-        int: Match score (0-100)
+    Return set of candidate keywords (length >=3), excluding stopwords.
     """
-    resume_lower = resume_text.lower()
-    jd_lower = job_description.lower()
-    
-    # Extract important words from job description
-    jd_words = set(re.findall(r'\b[a-z]{3,}\b', jd_lower))
-    resume_words = set(re.findall(r'\b[a-z]{3,}\b', resume_lower))
-    
-    # Common words to ignore
-    stop_words = {'the', 'and', 'for', 'with', 'this', 'that', 'will', 'have', 'from', 'are', 'can'}
-    jd_words -= stop_words
-    
-    # Calculate match
-    matched = jd_words.intersection(resume_words)
-    match_ratio = len(matched) / len(jd_words) if jd_words else 0
-    
+    tokens = _word_tokens(text)
+    return set(t for t in tokens if t not in _STOPWORDS and len(t) >= 3)
+
+def discover_unknown_skills(text: str, known_skills_flat: set, min_freq: int = 2):
+    """
+    Finds repeated candidate tokens that are likely to be skills but not in known_skills_flat.
+    Returns a list of discovered skills (lowercase).
+    """
+    tokens = _word_tokens(text)
+    counts = Counter(tokens)
+    discovered = [t for t, c in counts.items()
+                  if c >= min_freq and t not in known_skills_flat and t not in _STOPWORDS]
+    return discovered
+
+def _flatten_known_skills(TECH_SKILLS):
+    flat = set()
+    for cat, skills in TECH_SKILLS.items():
+        for s in skills:
+            flat.add(s.lower())
+    for s in SOFT_SKILLS:
+        flat.add(s.lower())
+    return flat
+
+def _semantic_similarity(a: str, b: str, nlp_obj):
+    """
+    Returns a float between 0.0 and 1.0 representing semantic similarity.
+    Falls back to 0 if nlp_obj is None or empty inputs.
+    """
+    if not nlp_obj or not a or not b:
+        return 0.0
+    try:
+        return max(0.0, min(1.0, nlp_obj(a).similarity(nlp_obj(b))))
+    except Exception:
+        return 0.0
+
+def _per_term_semantic_matches(resume_terms, jd_terms, nlp_obj, threshold=0.70):
+    """
+    For each jd_term, see if any resume_term is semantically similar above threshold.
+    Returns set of jd_terms that matched semantically.
+    """
+    if not nlp_obj:
+        return set()
+    matched = set()
+    for j in jd_terms:
+        jdoc = nlp_obj(j)
+        for r in resume_terms:
+            try:
+                if jdoc.similarity(nlp_obj(r)) >= threshold:
+                    matched.add(j)
+                    break
+            except Exception:
+                continue
+    return matched
+
+def calculate_keyword_match(resume_text: str, job_description: str) -> int:
+    """
+    Backwards-compatible improved keyword match:
+    - If spaCy is available, uses document-level semantic similarity (0-1) and returns 0-100.
+    - Otherwise falls back to a robust word-overlap ratio (ignore common words).
+    """
+    if not job_description:
+        return 0
+
+    resume_norm = _normalize(resume_text)
+    jd_norm = _normalize(job_description)
+
+    # Prefer semantic doc similarity if spaCy is loaded
+    global nlp
+    if 'nlp' in globals() and nlp:
+        try:
+            sim = _semantic_similarity(resume_norm, jd_norm, nlp)
+            return int(sim * 100)
+        except Exception:
+            pass
+
+    # fallback: word overlap of important tokens
+    jd_tokens = _extract_candidate_keywords(jd_norm)
+    resume_tokens = _extract_candidate_keywords(resume_norm)
+    jd_tokens = {t for t in jd_tokens if len(t) >= 3}
+    resume_tokens = {t for t in resume_tokens if len(t) >= 3}
+
+    if not jd_tokens:
+        return 0
+    matched = jd_tokens.intersection(resume_tokens)
+    match_ratio = len(matched) / len(jd_tokens)
     return int(match_ratio * 100)
+
+def calculate_ats_score(text: str, job_description: str = None) -> int:
+    """
+    Replacement calculate_ats_score that returns a 0-100 integer.
+    Uses a weighted, explainable combination of:
+      - contact completeness (10%)
+      - section structure quality (15%)
+      - skill relevance to JD (30%)
+      - experience relevance (20%)
+      - semantic keyword match (15%)
+      - resume hygiene (10%)
+    If no job_description provided, skill relevance is computed as a general 'skill richness' metric.
+    """
+    text_norm = _normalize(text)
+    word_count = len(text_norm.split())
+
+    # ----- contact completeness (0.0 - 1.0) -----
+    contact_points = 0.0
+    if re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text):
+        contact_points += 0.5
+    if re.search(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', text):
+        contact_points += 0.5
+    contact_score = contact_points  # 0..1
+
+    # ----- sections quality (0.0 - 1.0) -----
+    sections = check_resume_sections(text)
+    # base presence fraction
+    presence_frac = sum(bool(v) for v in sections.values()) / len(sections)
+    # augment with basic length checks for each present section
+    section_length_bonus = 0.0
+    for key in ['summary', 'experience', 'education', 'skills', 'projects']:
+        if sections.get(key):
+            # naive: look for the header and measure following words count
+            header_re = re.compile(rf'{key}[:\s]*\n?(.*?)(?:\n\s*\n|$)', re.IGNORECASE | re.DOTALL)
+            m = header_re.search(text)
+            if m:
+                length = len(_normalize(m.group(1)).split())
+                section_length_bonus += min(length / 150.0, 1.0) * 0.2  # capped small bonus
+    sections_score = min(1.0, presence_frac * 0.8 + section_length_bonus)
+
+    # ----- skills relevance (0.0 - 1.0) -----
+    known_flat = _flatten_known_skills(TECH_SKILLS)
+    # resume detected skills (from previous extract_skills)
+    skills_found = extract_skills(text)
+    resume_skill_terms = set()
+    for cat, items in skills_found['technical'].items():
+        for s in items:
+            resume_skill_terms.add(s.lower())
+    for s in skills_found['soft']:
+        resume_skill_terms.add(s.lower())
+
+    # discover unknown (emerging) skills from resume text
+    discovered = discover_unknown_skills(text, known_flat, min_freq=1)
+    discovered = [d for d in discovered if d not in resume_skill_terms]
+    # add discovered as lower-weight resume terms
+    resume_terms_all = set(resume_skill_terms) | set(discovered)
+
+    # derive JD skill terms
+    jd_terms = set()
+    if job_description:
+        jd_tokens = _extract_candidate_keywords(job_description)
+        # prefer known skills if present, else jd_tokens
+        for k in known_flat:
+            if k in job_description.lower():
+                jd_terms.add(k)
+        jd_terms |= {t for t in jd_tokens if t not in _STOPWORDS}
+
+    global nlp
+    skill_relevance = 0.0
+    if job_description and jd_terms:
+        # exact matches
+        exact_matches = resume_terms_all.intersection(jd_terms)
+        # semantic matches per-term if spaCy is available
+        semantic_matches = set()
+        if nlp:
+            try:
+                semantic_matches = _per_term_semantic_matches(resume_terms_all, jd_terms, nlp, threshold=0.72)
+            except Exception:
+                semantic_matches = set()
+        # discovered matches (lower weight)
+        discovered_matches = set(discovered).intersection(jd_terms)
+
+        # compute a weighted fraction:
+        exact_count = len(exact_matches)
+        semantic_count = len(semantic_matches - exact_matches)
+        discovered_count = len(discovered_matches - exact_matches - semantic_matches)
+
+        denom = max(len(jd_terms), 1)
+        raw = (exact_count * 1.0 + semantic_count * 0.75 + discovered_count * 0.5) / denom
+        skill_relevance = max(0.0, min(1.0, raw))
+    else:
+        # No JD: compute a 'skill richness' relative score (favoring relevant, not fluff)
+        total_tech = sum(len(v) for v in skills_found['technical'].values())
+        skill_relevance = min(1.0, total_tech / 12.0)  # 12 solid tech items -> full score
+
+    # ----- experience relevance (0.0 - 1.0) -----
+    exp_years = extract_experience_years(text)
+    # simple mapping: 0-5 years maps linearly to 0..1, extra years plateau
+    experience_relevance = min(1.0, exp_years / 5.0)
+
+    # crude bonus if JD explicitly asks for seniority and resume matches
+    if job_description and ('senior' in job_description.lower() or 'lead' in job_description.lower()):
+        # require at least 3 years for partial; more for full
+        experience_relevance = max(experience_relevance, min(1.0, exp_years / 3.0))
+
+    # ----- semantic keyword match (0.0 - 1.0) -----
+    if job_description:
+        semantic_km = 0.0
+        if 'nlp' in globals() and nlp:
+            try:
+                semantic_km = _semantic_similarity(text_norm, job_description, nlp)
+            except Exception:
+                semantic_km = 0.0
+        else:
+            # fallback to overlap
+            jd_tokens = _extract_candidate_keywords(job_description)
+            resume_tokens = _extract_candidate_keywords(text)
+            if jd_tokens:
+                semantic_km = len(jd_tokens.intersection(resume_tokens)) / len(jd_tokens)
+        keyword_semantic_score = max(0.0, min(1.0, semantic_km))
+    else:
+        keyword_semantic_score = 0.0
+
+    # ----- resume hygiene (0.0 - 1.0) -----
+    # ideal length: 400-800 words; good: 300-1000
+    hygiene = 0.4
+    if 400 <= word_count <= 800:
+        hygiene = 1.0
+    elif 300 <= word_count <= 1000:
+        hygiene = 0.8
+    elif word_count < 300:
+        hygiene = 0.5
+    else:
+        hygiene = 0.6
+
+    # ----- final weighted aggregation -----
+    weights = {
+        'contact': 0.10,
+        'sections': 0.15,
+        'skills': 0.30,
+        'experience': 0.20,
+        'keywords': 0.15,
+        'hygiene': 0.10
+    }
+
+    # If JD not provided, reduce keywords weight and move to skills/hygiene
+    if not job_description:
+        weights['keywords'] = 0.05
+        weights['skills'] += 0.10
+        weights['hygiene'] += 0.0
+
+    final_score = (
+        contact_score * weights['contact'] +
+        sections_score * weights['sections'] +
+        skill_relevance * weights['skills'] +
+        experience_relevance * weights['experience'] +
+        keyword_semantic_score * weights['keywords'] +
+        hygiene * weights['hygiene']
+    )
+
+    # scale to 0-100 and return int
+    scaled = int(round(max(0.0, min(1.0, final_score)) * 100))
+    return min(100, scaled)
+
 
 def get_improvement_suggestions_ats(text, sections, skills, contact):
     """

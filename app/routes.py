@@ -177,9 +177,11 @@ def convert_format_endpoint():
         base_name = os.path.splitext(filename)[0]
         output_filename = f"{base_name}_converted_{timestamp}.{target_format}"
         temp_output = os.path.join(temp_dir, output_filename)
+        temp_output_created = False
         
         try:
             convert_format(temp_input, temp_output, file_ext, target_format, base_name)
+            temp_output_created = True
             
             # Send file
             return send_file(
@@ -188,10 +190,22 @@ def convert_format_endpoint():
                 as_attachment=True,
                 download_name=output_filename
             )
+        except Exception as conv_error:
+            # Cleanup temp output if it was created but conversion failed
+            if temp_output_created and os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                except:
+                    pass
+            # Re-raise to be caught by outer exception handler
+            raise conv_error
         finally:
             # Cleanup temp input
             if os.path.exists(temp_input):
-                os.remove(temp_input)
+                try:
+                    os.remove(temp_input)
+                except:
+                    pass
     
     except Exception as e:
         print(f"Conversion error: {str(e)}")  # ✅ Add this for debugging

@@ -54,6 +54,30 @@ def get_summarizer():
             {"summary_text": text[:300] + "... (summary unavailable)"}
         ]
     return _summarizer
+def extract_key_sentences(text, max_sentences=8):
+    """
+    Extract important sentences using simple heuristics
+    (length, position, keywords)
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if len(sentences) <= max_sentences:
+        return text
+
+    scored = []
+    keywords = {'decide', 'agree', 'action', 'important', 'key', 'will', 'should', 'plan'}
+
+    for i, sent in enumerate(sentences):
+        score = 0
+        score += 1 if 8 <= len(sent.split()) <= 30 else 0
+        score += 1 if any(k in sent.lower() for k in keywords) else 0
+        score += 1 if i < 3 else 0  # intro bias
+        scored.append((score, sent))
+
+    scored.sort(reverse=True)
+    selected = [s for _, s in scored[:max_sentences]]
+
+    return " ".join(selected)
+
 
 def summarize_text(text, max_length=150, min_length=50):
     """
@@ -86,15 +110,29 @@ def summarize_text(text, max_length=150, min_length=50):
         if len(words) > 900:  # Leave buffer for tokenization
             text = ' '.join(words[:900])
         
+        # 🔹 Dynamic summary length based on document size
+        word_count = len(text.split())
+
+        dynamic_max = min(300, max(150, word_count // 3))
+        dynamic_min = min(120, max(50, word_count // 6))
+
         # Generate summary
+        # Step 1: extract key sentences first
+        anchor_text = extract_key_sentences(text)
+
+        # Step 2: summarize anchors, not full text
         result = summarizer(
-            text,
-            max_length=max_length,
-            min_length=min_length,
+            anchor_text,
+            max_length=dynamic_max,  # relax compression
+            min_length=dynamic_min,
             do_sample=False
         )
+
+        
         
         summary = result[0]['summary_text']
+        if len(summary.split()) < dynamic_min:
+            summary = anchor_text[:800]
         
         return {
             'summary': summary,
